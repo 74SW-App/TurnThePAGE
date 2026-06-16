@@ -4692,12 +4692,16 @@ window.sendScoreToSharePoint = function() {
 })
 .then(text => console.log("Power Automate response:", text))
 .catch(err => console.error("Erreur envoi :", err));
+}
 function triggerGameOver() {
     window.sendScoreToSharePoint();
+  
   const overlay = document.getElementById('gameover-overlay');
+  
   if (overlay) {
     document.getElementById('gameover-score').textContent =
       state.flagsPlanted.length + (currentLang === 'fr' ? ' nodes découverts' : ' nodes discovered');
+      
     overlay.classList.add('active');
   }
 }
