@@ -4675,8 +4675,22 @@ function applyKnockback() {
     if (typeof updateAstronautPosition === 'function') updateAstronautPosition();
   }
 }
-
+function sendScoreToSharePoint() {
+    fetch("https://default300f59df78e6436f9b27b64973e34f.7d.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/50bf169aafea4971bb716e750b926ded/triggers/manual/paths/invoke?api-version=1", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            name: state.username || "Inconnu",
+            score: state.flagsPlanted.length
+        })
+    })
+    .then(() => console.log("Score envoyé"))
+    .catch(err => console.error("Erreur envoi :", err));
+}
 function triggerGameOver() {
+    sendScoreToSharePoint();
   const overlay = document.getElementById('gameover-overlay');
   if (overlay) {
     document.getElementById('gameover-score').textContent =
