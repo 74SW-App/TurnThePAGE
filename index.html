@@ -4682,13 +4682,16 @@ window.sendScoreToSharePoint = function() {
             "Content-Type": "application/json"
         },
         body: JSON.stringify({
-            name: state.username || "Inconnu",
-            score: state.flagsPlanted.length
-        })
-    })
-    .then(() => console.log("Score envoyé"))
-    .catch(err => console.error("Erreur envoi :", err));
-}
+    name: state.username || "Inconnu",
+    score: Number(state.flagsPlanted.length || 0)
+})
+})
+.then(response => {
+    console.log("Power Automate status:", response.status);
+    return response.text();
+})
+.then(text => console.log("Power Automate response:", text))
+.catch(err => console.error("Erreur envoi :", err));
 function triggerGameOver() {
     window.sendScoreToSharePoint();
   const overlay = document.getElementById('gameover-overlay');
