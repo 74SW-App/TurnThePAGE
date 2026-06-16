@@ -4676,7 +4676,7 @@ function applyKnockback() {
   }
 }
 window.sendScoreToSharePoint = function() {
-    fetch("https://default300f59df78e6436f9b27b64973e34f.7d.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/50bf169aafea4971bb716e750b926ded/triggers/manual/paths/invoke?api-version=1", {
+    fetch("https://default300f59df78e6436f9b27b64973e34f.7d.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/50bf169aafea4971bb716e750b926ded/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=0ym6KwRIk2COZjiyPNjLjH8_yuUP4vqLwiS60qKVBpI", {
         method: "POST",
         headers: {
             "Content-Type": "application/json"
