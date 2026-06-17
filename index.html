@@ -4675,31 +4675,18 @@ function applyKnockback() {
     if (typeof updateAstronautPosition === 'function') updateAstronautPosition();
   }
 }
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-    name: state.username || "Inconnu",
-    score: Number(state.flagsPlanted.length || 0)
-})
-})
-.then(response => {
-    console.log("Power Automate status:", response.status);
-    return response.text();
-})
-.then(text => console.log("Power Automate response:", text))
-.catch(err => console.error("Erreur envoi :", err));
-}
-  
-  const overlay = document.getElementById('gameover-overlay');
-  
-  if (overlay) {
-    document.getElementById('gameover-score').textContent =
-      state.flagsPlanted.length + (currentLang === 'fr' ? ' nodes découverts' : ' nodes discovered');
-      
-    overlay.classList.add('active');
-  }
+function triggerGameOver() {
+const overlay = document.getElementById('gameover-overlay');
+
+    if (overlay) {
+        document.getElementById('gameover-score').textContent =
+            state.flagsPlanted.length +
+            (currentLang === 'fr'
+                ? ' nodes découverts'
+                : ' nodes discovered');
+
+        overlay.classList.add('active');
+    }
 }
 
 function continueAfterGameOver() {
