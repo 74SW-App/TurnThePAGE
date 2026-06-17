@@ -4675,8 +4675,6 @@ function applyKnockback() {
     if (typeof updateAstronautPosition === 'function') updateAstronautPosition();
   }
 }
-window.sendScoreToSharePoint = function() {
-    fetch("https://default300f59df78e6436f9b27b64973e34f.7d.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/f20aa29eb5c8481fa9bcaf703cb5e1f9/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=U0aMUhG0JGL_mF-EUgnUITEfsvp-vM7fJvZJ2AimV_8", {
         method: "POST",
         headers: {
             "Content-Type": "application/json"
@@ -4693,8 +4691,6 @@ window.sendScoreToSharePoint = function() {
 .then(text => console.log("Power Automate response:", text))
 .catch(err => console.error("Erreur envoi :", err));
 }
-function triggerGameOver() {
-    window.sendScoreToSharePoint();
   
   const overlay = document.getElementById('gameover-overlay');
   
