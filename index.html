@@ -3205,16 +3205,30 @@ function saveClues() {
   if (onlineCluesLoaded) saveCluesOnline();
 }
 
+function normalizeOnlineClues(payload) {
+  // Compatibility: an older save format stored the quests inside { quests: {...} }.
+  // The game needs the direct object: { paris: {...}, brussels: {...}, ... }.
+  if (payload && typeof payload === 'object' && payload.quests && typeof payload.quests === 'object') {
+    return payload.quests;
+  }
+  return payload;
+}
+
 async function loadCluesOnline() {
   try {
     const response = await fetch(`${CLOUD_FLARE_API_URL}/quests`, { cache: 'no-store' });
     if (!response.ok) throw new Error('HTTP ' + response.status);
-    const onlineClues = await response.json();
+    const payload = await response.json();
+    const onlineClues = normalizeOnlineClues(payload);
 
     if (onlineClues && typeof onlineClues === 'object' && Object.keys(onlineClues).length > 0) {
       CLUES = onlineClues;
       onlineCluesLoaded = true;
       saveCluesLocal();
+
+      // If the server still has the old wrapper format, rewrite it cleanly once.
+      if (payload && payload.quests) await saveCluesOnline();
+
       if (typeof renderAdminClueList === 'function') renderAdminClueList();
       if (typeof updateHUD === 'function') updateHUD();
       console.log('[Turn the PAGE] Online quests loaded:', Object.keys(CLUES).length);
@@ -3232,13 +3246,14 @@ async function loadCluesOnline() {
 
 async function saveCluesOnline() {
   try {
+    const cleanClues = normalizeOnlineClues(CLUES) || {};
     const response = await fetch(`${CLOUD_FLARE_API_URL}/quests`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(CLUES)
+      body: JSON.stringify(cleanClues)
     });
     if (!response.ok) throw new Error('HTTP ' + response.status);
-    console.log('[Turn the PAGE] Online quests saved:', Object.keys(CLUES).length);
+    console.log('[Turn the PAGE] Online quests saved:', Object.keys(cleanClues).length);
   } catch (err) {
     console.error('[Turn the PAGE] Online quests save failed:', err);
     showToast('⚠ Sauvegarde en ligne impossible');
