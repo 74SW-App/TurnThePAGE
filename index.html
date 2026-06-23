@@ -3171,6 +3171,8 @@ const DEFAULT_CLUES = {
 // Load custom clues from localStorage if present, otherwise use defaults
 // Bump this whenever the default missions need to be re-applied for all users
 const CLUES_VERSION = 4;
+const CLOUD_FLARE_API_URL = 'https://turn-the-page-api.74sw.workers.dev';
+let onlineCluesLoaded = false;
 
 let CLUES = (() => {
   try {
@@ -3190,11 +3192,85 @@ let CLUES = (() => {
   return JSON.parse(JSON.stringify(DEFAULT_CLUES));
 })();
 
-function saveClues() {
+function saveCluesLocal() {
   try {
     localStorage.setItem('gap_quest_clues', JSON.stringify(CLUES));
     localStorage.setItem('gap_quest_clues_version', String(CLUES_VERSION));
   } catch(e) {}
+}
+
+function saveClues() {
+  saveCluesLocal();
+  // After the online data has loaded once, every admin save is pushed to Cloudflare too.
+  if (onlineCluesLoaded) saveCluesOnline();
+}
+
+async function loadCluesOnline() {
+  try {
+    const response = await fetch(`${CLOUD_FLARE_API_URL}/quests`, { cache: 'no-store' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const onlineClues = await response.json();
+
+    if (onlineClues && typeof onlineClues === 'object' && Object.keys(onlineClues).length > 0) {
+      CLUES = onlineClues;
+      onlineCluesLoaded = true;
+      saveCluesLocal();
+      if (typeof renderAdminClueList === 'function') renderAdminClueList();
+      if (typeof updateHUD === 'function') updateHUD();
+      console.log('[Turn the PAGE] Online quests loaded:', Object.keys(CLUES).length);
+      return;
+    }
+
+    // If the online table is empty, seed it with the current default/local quests.
+    onlineCluesLoaded = true;
+    await saveCluesOnline();
+  } catch (err) {
+    onlineCluesLoaded = false;
+    console.warn('[Turn the PAGE] Online quests not loaded, using local quests:', err);
+  }
+}
+
+async function saveCluesOnline() {
+  try {
+    const response = await fetch(`${CLOUD_FLARE_API_URL}/quests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(CLUES)
+    });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    console.log('[Turn the PAGE] Online quests saved:', Object.keys(CLUES).length);
+  } catch (err) {
+    console.error('[Turn the PAGE] Online quests save failed:', err);
+    showToast('⚠ Sauvegarde en ligne impossible');
+  }
+}
+
+// Debug/compatibility aliases for browser console checks.
+window.saveCluesOnline = saveCluesOnline;
+window.saveQuestsOnline = saveCluesOnline;
+window.loadCluesOnline = loadCluesOnline;
+
+// Start loading server-side quests as soon as the script is parsed.
+loadCluesOnline();
+
+async function sendScoreOnline() {
+  try {
+    const player = String(state.username || '').trim();
+    if (!player || isTestAccount(player)) return;
+
+    const nodes = Array.isArray(state.flagsPlanted) ? state.flagsPlanted.length : 0;
+    const points = Number(state.points || 0);
+    const items = Array.isArray(state.artifactsOwned) ? state.artifactsOwned.length : 0;
+    const score = Math.max(0, points + nodes + items);
+
+    await fetch(`${CLOUD_FLARE_API_URL}/submit-score`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ player, score })
+    });
+  } catch (err) {
+    console.warn('[Turn the PAGE] Online score not sent:', err);
+  }
 }
 
 /* ============================================================
@@ -3245,60 +3321,6 @@ function saveAnalytics(events) {
   } catch(e) {}
 }
 
-/* ============================================================
-   ONLINE LEADERBOARD — Cloudflare Workers + D1
-   - Scores are sent silently in the background.
-   - Only the Admin > Statistics panel reads the global leaderboard.
-   ============================================================ */
-const SCORE_API_URL = "https://turn-the-page-api.74sw.workers.dev";
-
-function getOnlineScoreSnapshot() {
-  const points = Number(state.points || 0);
-  const nodes = Array.isArray(state.flagsPlanted) ? state.flagsPlanted.length : 0;
-  const items = Array.isArray(state.artifactsOwned) ? state.artifactsOwned.length : 0;
-  const kills = (typeof totalSessionKills === 'function') ? Number(totalSessionKills() || 0) : 0;
-  return points + nodes + items + kills;
-}
-
-async function sendScoreOnline() {
-  try {
-    if (isTestAccount()) return;
-
-    const player = String(state.username || "").trim();
-    const score = Number(getOnlineScoreSnapshot() || 0);
-
-    if (!player || score <= 0) return;
-
-    await fetch(`${SCORE_API_URL}/submit-score`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        player,
-        score
-      })
-    });
-
-    console.log("[Turn the PAGE] Online score sent:", player, score);
-  } catch (err) {
-    console.warn("[Turn the PAGE] Online score not sent:", err);
-  }
-}
-
-async function loadOnlineLeaderboard() {
-  const res = await fetch(`${SCORE_API_URL}/leaderboard`, {
-    method: "GET",
-    cache: "no-store"
-  });
-
-  if (!res.ok) {
-    throw new Error("Leaderboard API error: " + res.status);
-  }
-
-  return await res.json();
-}
-
 // Returns true if the current user is a test/admin account that should be
 // excluded from analytics and from the leaderboard. The check is case-insensitive.
 function isTestAccount(username) {
@@ -3327,12 +3349,6 @@ function trackEvent(type, data) {
   // Cap stored events at 5000 to avoid bloating localStorage
   if (events.length > 5000) events.splice(0, events.length - 5000);
   saveAnalytics(events);
-
-  // Send only meaningful score updates online.
-  // The admin leaderboard reads this global score from Cloudflare D1.
-  if (['flag_planted', 'artifact_purchased', 'kill_big_boss', 'kill_final_boss'].includes(type)) {
-    sendScoreOnline();
-  }
 }
 
 const OUTFITS = {
@@ -4735,19 +4751,15 @@ function applyKnockback() {
     if (typeof updateAstronautPosition === 'function') updateAstronautPosition();
   }
 }
+
 function triggerGameOver() {
   sendScoreOnline();
   const overlay = document.getElementById('gameover-overlay');
-
-    if (overlay) {
-        document.getElementById('gameover-score').textContent =
-            state.flagsPlanted.length +
-            (currentLang === 'fr'
-                ? ' nodes découverts'
-                : ' nodes discovered');
-
-        overlay.classList.add('active');
-    }
+  if (overlay) {
+    document.getElementById('gameover-score').textContent =
+      state.flagsPlanted.length + (currentLang === 'fr' ? ' nodes découverts' : ' nodes discovered');
+    overlay.classList.add('active');
+  }
 }
 
 function continueAfterGameOver() {
@@ -12060,23 +12072,21 @@ function renderClueTable(events) {
 async function renderPlayerList() {
   const container = document.getElementById('stats-player-list');
   const search = document.getElementById('stats-player-search')?.value.toLowerCase() || '';
-
   if (!container) return;
 
-  container.innerHTML = '<div style="color:#8a92b8; padding:12px; font-size:11px;">Loading online leaderboard...</div>';
-
   try {
-    const rows = await loadOnlineLeaderboard();
+    const response = await fetch(`${CLOUD_FLARE_API_URL}/leaderboard`, { cache: 'no-store' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    let players = await response.json();
 
-    const filtered = (Array.isArray(rows) ? rows : [])
-      .filter(row => {
-        const name = String(row.player || '').toLowerCase();
-        return !search || name.includes(search);
-      })
+    if (!Array.isArray(players)) players = [];
+    players = players
+      .filter(p => p && p.player && !isTestAccount(p.player))
+      .filter(p => !search || String(p.player).toLowerCase().includes(search))
       .sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
 
-    if (filtered.length === 0) {
-      container.innerHTML = '<div style="color:#8a92b8; padding:12px; font-size:11px;">No online players yet</div>';
+    if (players.length === 0) {
+      container.innerHTML = '<div style="color:#8a92b8; padding:12px; font-size:11px;">No players yet</div>';
       return;
     }
 
@@ -12088,15 +12098,14 @@ async function renderPlayerList() {
       '<th style="text-align:center;">Last seen</th>' +
       '</tr></thead><tbody>';
 
-    filtered.forEach((row, i) => {
+    players.forEach((p, i) => {
       const rankEmoji = i === 0 ? '🥇' : (i === 1 ? '🥈' : (i === 2 ? '🥉' : (i + 1)));
       const rowCls = i < 3 ? 'leaderboard-row top-row' : 'leaderboard-row';
-      const lastSeenStr = row.updated_at ? formatRelativeTime(row.updated_at) : '—';
-
+      const lastSeenStr = p.updated_at ? formatRelativeTime(p.updated_at) : '—';
       html += '<tr class="' + rowCls + '">';
       html += '<td style="text-align:center; font-weight:700;">' + rankEmoji + '</td>';
-      html += '<td><span class="lb-name">' + escapeHtml(row.player || '') + '</span></td>';
-      html += '<td style="text-align:center; font-weight:800; color:#ffd700;">' + Number(row.score || 0) + '</td>';
+      html += '<td><span class="lb-name">' + escapeHtml(String(p.player)) + '</span></td>';
+      html += '<td style="text-align:center; font-weight:800; color:#ffd700;">' + Number(p.score || 0) + '</td>';
       html += '<td style="text-align:center; color:#8a92b8; font-size:10px;">' + lastSeenStr + '</td>';
       html += '</tr>';
     });
@@ -12104,99 +12113,47 @@ async function renderPlayerList() {
     html += '</tbody></table></div>';
     container.innerHTML = html;
   } catch (err) {
-    console.warn("[Turn the PAGE] Online leaderboard unavailable, using local data:", err);
-    renderLocalPlayerList();
+    console.warn('[Turn the PAGE] Online leaderboard unavailable, using local analytics:', err);
+    renderLocalPlayerListFallback(container, search);
   }
 }
 
-function renderLocalPlayerList() {
-  // Exclude test/admin accounts from the leaderboard (they're for trying the game)
+function renderLocalPlayerListFallback(container, search) {
   const events = loadAnalytics().filter(e => !isTestAccount(e.username));
-  const search = document.getElementById('stats-player-search')?.value.toLowerCase() || '';
-
-  // Aggregate per player. We compute, for each user:
-  //  - kills by monster type, points (max snapshot), artifacts bought, nodes discovered
-  //  - sessions / codes / hints for context
   const players = {};
   events.forEach(e => {
     if (!players[e.username]) {
-      players[e.username] = {
-        sessions: 0, codes: 0, codeSuccess: 0, flags: 0, hints: 0,
-        killsBigBoss: 0, killsFinalBoss: 0,
-        artifactsBought: 0,
-        // We rely on the snapshot fields added by trackEvent (points, artifactsOwned, nodesDiscovered)
-        pointsMax: 0, artifactsMax: 0, nodesMax: 0,
-        firstSeen: e.ts, lastSeen: e.ts, discoveries: new Set()
-      };
+      players[e.username] = { score: 0, lastSeen: e.ts, pointsMax: 0, nodesMax: 0, artifactsMax: 0 };
     }
     const p = players[e.username];
     p.lastSeen = e.ts;
-    if (e.type === 'session_start') p.sessions++;
-    if (e.type === 'code_attempted') { p.codes++; if (e.data?.success) p.codeSuccess++; }
-    if (e.type === 'flag_planted') {
-      p.flags++;
-      if (e.data?.location) p.discoveries.add(e.data.location);
-    }
-    if (e.type === 'hint_revealed')      p.hints++;
-    if (e.type === 'kill_big_boss')      p.killsBigBoss++;
-    if (e.type === 'kill_final_boss')    p.killsFinalBoss++;
-    if (e.type === 'artifact_purchased') p.artifactsBought++;
-    // Track the max snapshot values (so an old event with low points doesn't override)
-    if (typeof e.points === 'number'           && e.points > p.pointsMax)             p.pointsMax = e.points;
-    if (typeof e.artifactsOwned === 'number'   && e.artifactsOwned > p.artifactsMax)  p.artifactsMax = e.artifactsOwned;
-    if (typeof e.nodesDiscovered === 'number'  && e.nodesDiscovered > p.nodesMax)     p.nodesMax = e.nodesDiscovered;
+    if (typeof e.points === 'number' && e.points > p.pointsMax) p.pointsMax = e.points;
+    if (typeof e.nodesDiscovered === 'number' && e.nodesDiscovered > p.nodesMax) p.nodesMax = e.nodesDiscovered;
+    if (typeof e.artifactsOwned === 'number' && e.artifactsOwned > p.artifactsMax) p.artifactsMax = e.artifactsOwned;
+    p.score = p.pointsMax + p.nodesMax + p.artifactsMax;
   });
 
-  // Compute the leaderboard score: total kills + points + artifacts bought + nodes
-  Object.values(players).forEach(p => {
-    p.totalKills = p.killsBigBoss + p.killsFinalBoss;
-    p.score = p.totalKills + p.pointsMax + p.artifactsMax + p.nodesMax;
-  });
-
-  // Filter + sort by score DESC (the highest at the top)
   const filtered = Object.entries(players)
     .filter(([name]) => !search || name.toLowerCase().includes(search))
     .sort((a, b) => b[1].score - a[1].score);
 
-  const container = document.getElementById('stats-player-list');
   if (filtered.length === 0) {
     container.innerHTML = '<div style="color:#8a92b8; padding:12px; font-size:11px;">No players yet</div>';
     return;
   }
 
-  // Build a table-style leaderboard
   let html = '<div style="overflow-x:auto;"><table class="leaderboard-table">';
-  html += '<thead><tr>' +
-    '<th style="text-align:center; width:34px;">#</th>' +
-    '<th>Player</th>' +
-    '<th style="text-align:center;">Score</th>' +
-    '<th style="text-align:center;">Points</th>' +
-    '<th style="text-align:center;">Nodes</th>' +
-    '<th style="text-align:center;">Items</th>' +
-    '<th style="text-align:center;">Big&nbsp;Boss</th>' +
-    '<th style="text-align:center;">Final</th>' +
-    '<th style="text-align:center;">Total&nbsp;kills</th>' +
-    '<th style="text-align:center;">Last seen</th>' +
-    '</tr></thead><tbody>';
-
+  html += '<thead><tr><th style="text-align:center; width:34px;">#</th><th>Player</th><th style="text-align:center;">Score</th><th style="text-align:center;">Last seen</th></tr></thead><tbody>';
   filtered.forEach(([name, p], i) => {
-    const lastSeenStr = formatRelativeTime(p.lastSeen);
     const rankEmoji = i === 0 ? '🥇' : (i === 1 ? '🥈' : (i === 2 ? '🥉' : (i + 1)));
     const rowCls = i < 3 ? 'leaderboard-row top-row' : 'leaderboard-row';
     html += '<tr class="' + rowCls + '">';
     html += '<td style="text-align:center; font-weight:700;">' + rankEmoji + '</td>';
     html += '<td><span class="lb-name">' + escapeHtml(name) + '</span></td>';
     html += '<td style="text-align:center; font-weight:800; color:#ffd700;">' + p.score + '</td>';
-    html += '<td style="text-align:center;">' + p.pointsMax + '</td>';
-    html += '<td style="text-align:center;">' + p.nodesMax + '</td>';
-    html += '<td style="text-align:center;">' + p.artifactsMax + '</td>';
-    html += '<td style="text-align:center;">' + p.killsBigBoss + '</td>';
-    html += '<td style="text-align:center;">' + p.killsFinalBoss + '</td>';
-    html += '<td style="text-align:center; font-weight:700;">' + p.totalKills + '</td>';
-    html += '<td style="text-align:center; color:#8a92b8; font-size:10px;">' + lastSeenStr + '</td>';
+    html += '<td style="text-align:center; color:#8a92b8; font-size:10px;">' + formatRelativeTime(p.lastSeen) + '</td>';
     html += '</tr>';
   });
-
   html += '</tbody></table></div>';
   container.innerHTML = html;
 }
