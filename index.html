@@ -3170,7 +3170,7 @@ const DEFAULT_CLUES = {
 
 // Load custom clues from localStorage if present, otherwise use defaults
 // Bump this whenever the default missions need to be re-applied for all users
-const CLUES_VERSION = 4;
+const CLUES_VERSION = 6;
 const CLOUD_FLARE_API_URL = 'https://turn-the-page-api.74sw.workers.dev';
 let onlineCluesLoaded = false;
 
@@ -3201,62 +3201,88 @@ function saveCluesLocal() {
 
 function saveClues() {
   saveCluesLocal();
-  // After the online data has loaded once, every admin save is pushed to Cloudflare too.
+  // Après le chargement initial, chaque sauvegarde admin est aussi envoyée en ligne.
   if (onlineCluesLoaded) saveCluesOnline();
 }
 
+function isValidClueObject(value) {
+  return value && typeof value === 'object' && typeof value.code === 'string' && value.code.trim();
+}
+
 function normalizeOnlineClues(payload) {
-  // Compatibility: an older save format stored the quests inside { quests: {...} }.
-  // The game needs the direct object: { paris: {...}, brussels: {...}, ... }.
-  if (payload && typeof payload === 'object' && payload.quests && typeof payload.quests === 'object') {
-    return payload.quests;
+  // Compatible avec les deux formats possibles :
+  // 1) { paris: {...}, brussels: {...} }
+  // 2) { quests: { paris: {...}, brussels: {...} } }
+  let raw = payload;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch(e) { raw = {}; }
   }
-  return payload;
+  if (raw && typeof raw === 'object' && raw.quests && typeof raw.quests === 'object') {
+    raw = raw.quests;
+  }
+
+  const cleaned = {};
+  if (raw && typeof raw === 'object') {
+    for (const [key, value] of Object.entries(raw)) {
+      if (isValidClueObject(value)) cleaned[key] = value;
+    }
+  }
+  return cleaned;
+}
+
+function mergeDefaultAndOnlineClues(onlineClues) {
+  // On garde toujours les quêtes par défaut du fichier,
+  // puis on ajoute/remplace avec les quêtes créées dans l'admin.
+  return {
+    ...JSON.parse(JSON.stringify(DEFAULT_CLUES)),
+    ...(onlineClues || {})
+  };
 }
 
 async function loadCluesOnline() {
   try {
     const response = await fetch(`${CLOUD_FLARE_API_URL}/quests`, { cache: 'no-store' });
     if (!response.ok) throw new Error('HTTP ' + response.status);
+
     const payload = await response.json();
     const onlineClues = normalizeOnlineClues(payload);
+    const mergedClues = mergeDefaultAndOnlineClues(onlineClues);
 
-    if (onlineClues && typeof onlineClues === 'object' && Object.keys(onlineClues).length > 0) {
-      CLUES = onlineClues;
-      onlineCluesLoaded = true;
-      saveCluesLocal();
+    CLUES = mergedClues;
+    onlineCluesLoaded = true;
+    saveCluesLocal();
 
-      // If the server still has the old wrapper format, rewrite it cleanly once.
-      if (payload && payload.quests) await saveCluesOnline();
-
-      if (typeof renderAdminClueList === 'function') renderAdminClueList();
-      if (typeof updateHUD === 'function') updateHUD();
-      console.log('[Turn the PAGE] Online quests loaded:', Object.keys(CLUES).length);
-      return;
+    // Nettoie/alimente la base si elle était vide ou dans l'ancien format { quests: ... }.
+    if (!onlineClues || Object.keys(onlineClues).length === 0 || (payload && payload.quests)) {
+      await saveCluesOnline();
     }
 
-    // If the online table is empty, seed it with the current default/local quests.
-    onlineCluesLoaded = true;
-    await saveCluesOnline();
+    if (typeof renderAdminClueList === 'function') renderAdminClueList();
+    if (typeof updateHUD === 'function') updateHUD();
+    console.log('[Turn the PAGE] Online quests loaded:', Object.keys(CLUES).length);
   } catch (err) {
     onlineCluesLoaded = false;
-    console.warn('[Turn the PAGE] Online quests not loaded, using local quests:', err);
+    console.warn('[Turn the PAGE] Online quests not loaded, using local/default quests:', err);
   }
 }
 
 async function saveCluesOnline() {
   try {
-    const cleanClues = normalizeOnlineClues(CLUES) || {};
+    const cleanClues = normalizeOnlineClues(CLUES);
+    const mergedClues = mergeDefaultAndOnlineClues(cleanClues);
+    CLUES = mergedClues;
+    saveCluesLocal();
+
     const response = await fetch(`${CLOUD_FLARE_API_URL}/quests`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(cleanClues)
+      body: JSON.stringify(mergedClues)
     });
     if (!response.ok) throw new Error('HTTP ' + response.status);
-    console.log('[Turn the PAGE] Online quests saved:', Object.keys(cleanClues).length);
+    console.log('[Turn the PAGE] Online quests saved:', Object.keys(mergedClues).length);
   } catch (err) {
     console.error('[Turn the PAGE] Online quests save failed:', err);
-    showToast('⚠ Sauvegarde en ligne impossible');
+    if (typeof showToast === 'function') showToast('⚠ Sauvegarde en ligne impossible');
   }
 }
 
@@ -9870,9 +9896,15 @@ function closeClueModal() {
 function submitCode() {
   const code = document.getElementById('code-input').value.trim().toLowerCase();
   let foundKey = null;
-  for (const [key, clue] of Object.entries(CLUES)) {
-    if (clue.code.toLowerCase() === code) { foundKey = key; break; }
+
+  for (const [key, clue] of Object.entries(CLUES || {})) {
+    if (!clue || typeof clue.code !== 'string') continue;
+    if (clue.code.trim().toLowerCase() === code) {
+      foundKey = key;
+      break;
+    }
   }
+
   if (!foundKey) {
     // Maybe it's a secret code?
     if (typeof checkSecretCode === 'function' && checkSecretCode(code)) {
