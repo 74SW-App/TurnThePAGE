@@ -3652,11 +3652,14 @@ async function saveStateOnline() {
     const player = getPlayerProgressKey(state.username);
     if (!player || isTestAccount(player)) return;
 
-    await fetch(`${CLOUD_FLARE_API_URL}/player-progress`, {
+    const response = await fetch(`${CLOUD_FLARE_API_URL}/player-progress`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ player, data: state })
+      body: JSON.stringify({ player, data: state }),
+      keepalive: true
     });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    console.log('[Turn the PAGE] Online player progress saved for:', state.username);
   } catch (e) {
     console.warn('[Turn the PAGE] Online progress save failed:', e);
   }
@@ -3689,8 +3692,12 @@ async function loadStateOnline() {
   return false;
 }
 
-function saveState() {
+function saveStateLocalOnly() {
   try { localStorage.setItem('gap_quest_save_' + state.username, JSON.stringify(state)); } catch(e) {}
+}
+
+function saveState() {
+  saveStateLocalOnly();
   scheduleSaveStateOnline();
 }
 async function loadState() {
@@ -3700,6 +3707,7 @@ async function loadState() {
     if (saved) {
       state = { ...state, ...JSON.parse(saved), username: state.username };
       localSaveFound = true;
+      console.log('[Turn the PAGE] Local player progress loaded for:', state.username);
     }
   } catch(e) {}
 
@@ -3731,7 +3739,22 @@ async function loadState() {
   if (typeof state.tutorialSeen === 'undefined') state.tutorialSeen = false;
   // Sync language
   currentLang = state.language || 'en';
+
+  // Keep local browser save aligned with online save after loading/migration.
+  saveStateLocalOnly();
 }
+
+// Debug helpers for browser console checks.
+window.saveStateOnline = saveStateOnline;
+window.loadStateOnline = loadStateOnline;
+window.saveState = saveState;
+window.loadState = loadState;
+
+// Best-effort final sync when the tab is closed/refreshed.
+window.addEventListener('beforeunload', function() {
+  try { if (state && state.username) saveStateOnline(); } catch(e) {}
+});
+
 async function logout() {
   saveState();
   await saveStateOnline();
