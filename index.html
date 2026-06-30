@@ -3576,7 +3576,10 @@ async function goToCodeStep() {
   if (!name) return;
 
   state.username = name;
-  await loadState();
+
+  // Load local save first, then try to restore/migrate the online save
+  loadState();
+  await loadStateOnline();
 
   const welcomeName = document.getElementById('welcome-name');
   if (welcomeName) {
@@ -3642,80 +3645,59 @@ function proceedAfterLogin() {
   }
 }
 
-function getPlayerProgressKey(username) {
-  return String(username || '').trim().toLowerCase();
+function getPlayerKey() {
+  return String(state.username || '').trim().toLowerCase();
 }
 
-let saveStateOnlineTimer = null;
 async function saveStateOnline() {
   try {
-    const player = getPlayerProgressKey(state.username);
+    const player = getPlayerKey();
     if (!player || isTestAccount(player)) return;
 
-    const response = await fetch(`${CLOUD_FLARE_API_URL}/player-progress`, {
+    await fetch(`${CLOUD_FLARE_API_URL}/player-progress`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ player, data: state }),
-      keepalive: true
+      body: JSON.stringify({ player, data: state })
     });
-    if (!response.ok) throw new Error('HTTP ' + response.status);
-    console.log('[Turn the PAGE] Online player progress saved for:', state.username);
-  } catch (e) {
-    console.warn('[Turn the PAGE] Online progress save failed:', e);
-  }
-}
 
-function scheduleSaveStateOnline() {
-  if (saveStateOnlineTimer) clearTimeout(saveStateOnlineTimer);
-  saveStateOnlineTimer = setTimeout(() => {
-    saveStateOnline();
-  }, 500);
+    console.log('[Turn the PAGE] Online progress saved for', player);
+  } catch (e) {
+    console.warn('[Turn the PAGE] Online progress save failed', e);
+  }
 }
 
 async function loadStateOnline() {
   try {
-    const player = getPlayerProgressKey(state.username);
-    if (!player || isTestAccount(player)) return false;
+    const player = getPlayerKey();
+    if (!player || isTestAccount(player)) return;
 
-    const response = await fetch(`${CLOUD_FLARE_API_URL}/player-progress?player=${encodeURIComponent(player)}`);
-    if (!response.ok) return false;
+    const res = await fetch(`${CLOUD_FLARE_API_URL}/player-progress?player=${encodeURIComponent(player)}`);
+    const onlineState = await res.json();
 
-    const data = await response.json();
-    if (data && Object.keys(data).length > 0) {
-      state = { ...state, ...data, username: state.username };
-      console.log('[Turn the PAGE] Online player progress loaded for:', state.username);
-      return true;
+    if (onlineState && Object.keys(onlineState).length > 0) {
+      state = { ...state, ...onlineState };
+      try { localStorage.setItem('gap_quest_save_' + state.username, JSON.stringify(state)); } catch(e) {}
+      console.log('[Turn the PAGE] Online progress loaded for', player);
+    } else {
+      // If an old local save exists, migrate it to Cloudflare on first login
+      await saveStateOnline();
+      console.log('[Turn the PAGE] No online progress found, local progress migrated if available');
     }
   } catch (e) {
-    console.warn('[Turn the PAGE] Online progress load failed:', e);
+    console.warn('[Turn the PAGE] Online progress load failed', e);
   }
-  return false;
-}
-
-function saveStateLocalOnly() {
-  try { localStorage.setItem('gap_quest_save_' + state.username, JSON.stringify(state)); } catch(e) {}
 }
 
 function saveState() {
-  saveStateLocalOnly();
-  scheduleSaveStateOnline();
+  try { localStorage.setItem('gap_quest_save_' + state.username, JSON.stringify(state)); } catch(e) {}
+  saveStateOnline();
 }
-async function loadState() {
-  let localSaveFound = false;
+
+function loadState() {
   try {
     const saved = localStorage.getItem('gap_quest_save_' + state.username);
-    if (saved) {
-      state = { ...state, ...JSON.parse(saved), username: state.username };
-      localSaveFound = true;
-      console.log('[Turn the PAGE] Local player progress loaded for:', state.username);
-    }
+    if (saved) state = { ...state, ...JSON.parse(saved) };
   } catch(e) {}
-
-  const onlineSaveFound = await loadStateOnline();
-  if (!onlineSaveFound && localSaveFound) {
-    // First migration: if an old local save exists, upload it once so it can be restored on another device.
-    scheduleSaveStateOnline();
-  }
   // === Migration: ensure myAvatar exists for old saves (V21 and before) ===
   if (!state.outfitsUnlocked.includes('myAvatar')) {
     state.outfitsUnlocked.unshift('myAvatar');
@@ -3739,25 +3721,9 @@ async function loadState() {
   if (typeof state.tutorialSeen === 'undefined') state.tutorialSeen = false;
   // Sync language
   currentLang = state.language || 'en';
-
-  // Keep local browser save aligned with online save after loading/migration.
-  saveStateLocalOnly();
 }
-
-// Debug helpers for browser console checks.
-window.saveStateOnline = saveStateOnline;
-window.loadStateOnline = loadStateOnline;
-window.saveState = saveState;
-window.loadState = loadState;
-
-// Best-effort final sync when the tab is closed/refreshed.
-window.addEventListener('beforeunload', function() {
-  try { if (state && state.username) saveStateOnline(); } catch(e) {}
-});
-
-async function logout() {
+function logout() {
   saveState();
-  await saveStateOnline();
   location.reload();
 }
 
