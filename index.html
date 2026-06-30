@@ -3666,23 +3666,57 @@ async function saveStateOnline() {
   }
 }
 
+function getProgressWeight(profile) {
+  if (!profile || typeof profile !== 'object') return 0;
+
+  const flags = Array.isArray(profile.flagsPlanted) ? profile.flagsPlanted.length : 0;
+  const partners = Array.isArray(profile.partnersCollected) ? profile.partnersCollected.length : 0;
+  const artifacts = Array.isArray(profile.artifactsOwned) ? profile.artifactsOwned.length : 0;
+  const hints = Array.isArray(profile.hintsRevealed) ? profile.hintsRevealed.length : 0;
+  const secrets = Array.isArray(profile.secretsFound) ? profile.secretsFound.length : 0;
+  const outfits = Array.isArray(profile.outfitsUnlocked)
+    ? profile.outfitsUnlocked.filter(o => o !== 'default' && o !== 'myAvatar').length
+    : 0;
+
+  return (flags * 1000) + (partners * 500) + (artifacts * 200) + (outfits * 100) + hints + secrets;
+}
+
 async function loadStateOnline() {
   try {
     const player = getPlayerKey();
     if (!player || isTestAccount(player)) return;
 
+    // Keep a copy of the local browser save before loading Cloudflare.
+    // This avoids overwriting a rich local progression with an empty online save.
+    const localState = JSON.parse(JSON.stringify(state));
+    const localPoints = Number(localState.points || 0);
+    const localWeight = getProgressWeight(localState);
+
     const res = await fetch(`${CLOUD_FLARE_API_URL}/player-progress?player=${encodeURIComponent(player)}`);
     const onlineState = await res.json();
 
-    if (onlineState && Object.keys(onlineState).length > 0) {
-      state = { ...state, ...onlineState };
-      try { localStorage.setItem('gap_quest_save_' + state.username, JSON.stringify(state)); } catch(e) {}
-      console.log('[Turn the PAGE] Online progress loaded for', player);
-    } else {
-      // If an old local save exists, migrate it to Cloudflare on first login
+    if (!onlineState || Object.keys(onlineState).length === 0) {
       await saveStateOnline();
-      console.log('[Turn the PAGE] No online progress found, local progress migrated if available');
+      console.log('[Turn the PAGE] No online progress found, local progress migrated for', player);
+      return;
     }
+
+    const onlinePoints = Number(onlineState.points || 0);
+    const onlineWeight = getProgressWeight(onlineState);
+
+    // Prefer the local save if it contains more real progression (nodes, outfits, artifacts, etc.),
+    // or if it has at least the same score. This protects old browser saves during migration.
+    if (localWeight > onlineWeight || (localWeight === onlineWeight && localPoints >= onlinePoints)) {
+      state = localState;
+      await saveStateOnline();
+      console.log('[Turn the PAGE] Local progress kept and migrated online for', player);
+      return;
+    }
+
+    state = { ...state, ...onlineState };
+    try { localStorage.setItem('gap_quest_save_' + state.username, JSON.stringify(state)); } catch(e) {}
+    console.log('[Turn the PAGE] Online progress loaded for', player);
+
   } catch (e) {
     console.warn('[Turn the PAGE] Online progress load failed', e);
   }
